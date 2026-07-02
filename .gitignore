@@ -4,3 +4,7 @@ node_modules/
 *.db
 /dist/
 /uploads/
+
+# Go binary
+log-analyzer
+log-analyzer.exe
