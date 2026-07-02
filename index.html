@@ -3,17 +3,381 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Document</title>
+    <title>Log Analyzer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.4.21/vue.global.prod.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: monospace;
+        background: #1e1e1e;
+        color: #d4d4d4;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      #topbar {
+        background: #2d2d2d;
+        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border-bottom: 1px solid #3a3a3a;
+      }
+
+      #topbar h1 {
+        font-size: 14px;
+        color: #9cdcfe;
+        flex: 1;
+      }
+
+      .btn {
+        background: #0e639c;
+        color: white;
+        border: none;
+        padding: 6px 14px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .btn:hover {
+        background: #1177bb;
+      }
+
+      #main {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      #sidebar {
+        width: 160px;
+        background: #252526;
+        border-right: 1px solid #3a3a3a;
+        display: flex;
+        flex-direction: column;
+      }
+
+      #sidebar h2 {
+        font-size: 11px;
+        color: #bbbbbb;
+        padding: 10px 12px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        border-bottom: 1px solid #3a3a3a;
+      }
+
+      #fileList {
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      .file-item {
+        padding: 8px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        border-bottom: 1px solid #2d2d2d;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .file-item:hover {
+        background: #2a2d2e;
+      }
+      .file-item.active {
+        background: #094771;
+        color: #fff;
+      }
+
+      #panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      #filters {
+        background: #2d2d2d;
+        padding: 8px 12px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        border-bottom: 1px solid #3a3a3a;
+        flex-wrap: wrap;
+      }
+
+      #filters label {
+        font-size: 12px;
+        color: #9cdcfe;
+      }
+
+      #filters input {
+        background: #3c3c3c;
+        border: 1px solid #555;
+        color: #d4d4d4;
+        padding: 4px 8px;
+        font-size: 12px;
+        font-family: monospace;
+      }
+
+      #logContainer {
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      .empty {
+        padding: 40px;
+        text-align: center;
+        color: #555;
+        font-size: 13px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+
+      thead {
+        background: #2d2d2d;
+        position: sticky;
+        top: 0;
+      }
+
+      th {
+        text-align: left;
+        padding: 1px 5px;
+        color: #9cdcfe;
+        border-bottom: 1px solid #3a3a3a;
+        font-weight: normal;
+      }
+
+      td {
+        padding: 1px 5px;
+        border-bottom: 1px solid #2a2a2a;
+        vertical-align: top;
+      }
+      td:first-child {
+        white-space: nowrap;
+        width: 160px;
+      }
+      tr:hover td {
+        background: #2a2d2e;
+      }
+
+      .level-Warning {
+        color: #ce9178;
+      }
+      .level-Error {
+        color: #f44747;
+      }
+      .level-Information {
+        color: #4ec9b0;
+      }
+      .level-Debug {
+        color: #888;
+      }
+
+      #pagination {
+        background: #2d2d2d;
+        padding: 6px 12px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border-top: 1px solid #3a3a3a;
+        font-size: 12px;
+      }
+
+      #pagination span {
+        color: #9cdcfe;
+      }
+      #pagination .btn {
+        padding: 4px 10px;
+        font-size: 12px;
+      }
+      #pagination .btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+    </style>
   </head>
   <body>
-    <h1>Hello World</h1>
-    <form
-      action="http://localhost:8000/upload"
-      method="POST"
-      enctype="multipart/form-data"
-    >
-      <input type="file" name="file" />
-      <button type="submit">Upload</button>
-    </form>
+    <div id="app">
+      <!-- Top bar -->
+      <div id="topbar">
+        <h1>Log Analyzer</h1>
+        <input
+          type="file"
+          ref="fileInput"
+          accept=".json"
+          style="display: none"
+          @change="uploadFile"
+        />
+        <button class="btn" @click="$refs.fileInput.click()">
+          Upload File
+        </button>
+      </div>
+
+      <!-- Main -->
+      <div id="main">
+        <!-- Sidebar -->
+        <div id="sidebar">
+          <h2>Files</h2>
+          <div id="fileList">
+            <div
+              v-if="files.length === 0"
+              style="padding: 12px; color: #555; font-size: 12px"
+            >
+              No files yet
+            </div>
+            <div
+              v-for="f in files"
+              :key="f.id"
+              class="file-item"
+              :class="{ active: activeFileId === f.id }"
+              @click="selectFile(f.id)"
+            >
+              {{ f.filename }}
+            </div>
+          </div>
+        </div>
+
+        <!-- Right panel -->
+        <div id="panel">
+          <!-- Filters -->
+          <div id="filters">
+            <label>From</label>
+            <input type="datetime-local" v-model="fromDate" />
+            <label>To</label>
+            <input type="datetime-local" v-model="toDate" />
+            <button class="btn" @click="applyFilter">Apply</button>
+          </div>
+
+          <div id="pagination">
+            <button class="btn" :disabled="page === 0" @click="prevPage">
+              ← Prev
+            </button>
+            <span>Page {{ page + 1 }}</span>
+            <button class="btn" @click="nextPage">Next →</button>
+          </div>
+
+          <!-- Log table -->
+          <div id="logContainer">
+            <div class="empty" v-if="!activeFileId">
+              Select a file from the left to view logs
+            </div>
+            <div class="empty" v-else-if="logs.length === 0">No logs found</div>
+            <table v-else>
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Level</th>
+                  <th>Message</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(log, i) in logs" :key="i">
+                  <td>{{ log.timestamp }}</td>
+                  <td :class="`level-${log.level}`">{{ log.level }}</td>
+                  <td>{{ log.message }}</td>
+                  <td>{{ log.source }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const { createApp, ref, onMounted } = Vue;
+
+      createApp({
+        setup() {
+          const files = ref([]);
+          const logs = ref([]);
+          const activeFileId = ref(null);
+          const fromDate = ref("");
+          const toDate = ref("");
+          const fileInput = ref(null);
+
+          async function loadFiles() {
+            const res = await fetch("/files");
+            files.value = (await res.json()) || [];
+          }
+
+          function selectFile(id) {
+            activeFileId.value = id;
+            applyFilter();
+          }
+
+          const page = ref(0);
+
+          async function applyFilter() {
+            if (!activeFileId.value) return;
+
+            let url = `/logs?file_id=${activeFileId.value}&page=${page.value * 5000}`;
+            if (fromDate.value)
+              url += `&from=${encodeURIComponent(fromDate.value)}`;
+            if (toDate.value) url += `&to=${encodeURIComponent(toDate.value)}`;
+
+            const res = await fetch(url);
+            logs.value = (await res.json()) || [];
+          }
+
+          function prevPage() {
+            if (page.value === 0) return;
+            page.value--;
+            applyFilter();
+          }
+
+          function nextPage() {
+            page.value++;
+            applyFilter();
+          }
+
+          function selectFile(id) {
+            activeFileId.value = id;
+            page.value = 0;
+            applyFilter();
+          }
+
+          async function uploadFile(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const form = new FormData();
+            form.append("file", file);
+
+            const res = await fetch("/upload", { method: "POST", body: form });
+            const data = await res.json();
+            alert(`Uploaded ${data.file} — ${data.entries} entries`);
+            loadFiles();
+          }
+
+          onMounted(loadFiles);
+
+          return {
+            files,
+            logs,
+            activeFileId,
+            fromDate,
+            toDate,
+            fileInput,
+            selectFile,
+            applyFilter,
+            uploadFile,
+            page,
+            prevPage,
+            nextPage,
+          };
+        },
+      }).mount("#app");
+    </script>
   </body>
 </html>
