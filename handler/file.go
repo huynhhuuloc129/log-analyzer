@@ -3,8 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
+	"strings"
 	"time"
 
 	"log-analyzer/database"
@@ -21,15 +20,6 @@ func UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-
-	// save file locally
-	if err := SaveFile(file, handler.Filename, "uploads"); err != nil {
-		http.Error(w, "Error saving file", http.StatusInternalServerError)
-		return
-	}
-
-	// Seek back to start so parseLog can read it again
-	file.Seek(0, io.SeekStart)
 
 	entries, err := parser.ParseLog(file)
 	if err != nil {
@@ -54,24 +44,6 @@ func UploadFile(w http.ResponseWriter, r *http.Request) {
 		"entries": len(entries),
 		"levels":  counts,
 	})
-}
-
-func SaveFile(file interface{ Read([]byte) (int, error) }, filename string, foldername string) error {
-	// Create the file on disk
-
-	if err := os.MkdirAll("./"+foldername, os.ModePerm); err != nil {
-		return err
-	}
-
-	dst, err := os.Create(fmt.Sprintf("./%s/%s", foldername, filename))
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-
-	// Copy contents into it
-	_, err = io.Copy(dst, file)
-	return err
 }
 
 func ListFiles(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +98,7 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 		args = append(args, to)
 	}
 
-	query += ` ORDER BY timestamp ASC LIMIT 5000 OFFSET ?`
+	query += ` ORDER BY timestamp ASC LIMIT 10000 OFFSET ?`
 	args = append(args, page)
 
 	rows, err := database.DB.Query(query, args...)
@@ -159,4 +131,85 @@ func GetLogs(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(logs)
+}
+
+func SearchLogs(w http.ResponseWriter, r *http.Request) {
+	fileID := r.URL.Query().Get("file_id")
+	query := r.URL.Query().Get("q")
+	page := r.URL.Query().Get("page")
+	levelsParam := r.URL.Query().Get("levels")
+
+	if fileID == "" || query == "" {
+		http.Error(w, "file_id and q are required", http.StatusBadRequest)
+		return
+	}
+
+	if page == "" {
+		page = "0"
+	}
+
+	// Build level filter
+	levelFilter := ""
+	levelArgs := []interface{}{}
+	if levelsParam != "" {
+		selectedLevels := strings.Split(levelsParam, ",")
+		placeholders := make([]string, len(selectedLevels))
+		for i, l := range selectedLevels {
+			placeholders[i] = "?"
+			levelArgs = append(levelArgs, l)
+		}
+		levelFilter = ` AND e.level IN (` + strings.Join(placeholders, ",") + `)`
+	}
+
+	// Count
+	countArgs := append([]interface{}{fileID, query}, levelArgs...)
+	countQuery := `SELECT COUNT(*) FROM entries e
+		JOIN entries_fts f ON e.id = f.rowid
+		WHERE e.file_id = ? AND entries_fts MATCH ?` + levelFilter
+	var total int
+	database.DB.QueryRow(countQuery, countArgs...).Scan(&total)
+
+	// Fetch
+	fetchArgs := append([]interface{}{fileID, query}, levelArgs...)
+	fetchArgs = append(fetchArgs, page)
+	sqlQuery := `SELECT e.timestamp, e.level, e.message, e.source
+		FROM entries e
+		JOIN entries_fts f ON e.id = f.rowid
+		WHERE e.file_id = ? AND entries_fts MATCH ?` + levelFilter + `
+		ORDER BY e.timestamp ASC
+		LIMIT 5000 OFFSET ?`
+
+	rows, err := database.DB.Query(sqlQuery, fetchArgs...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type LogRow struct {
+		Timestamp string `json:"timestamp"`
+		Level     string `json:"level"`
+		Message   string `json:"message"`
+		Source    string `json:"source"`
+	}
+
+	var logs []LogRow
+	for rows.Next() {
+		var l LogRow
+		var ts string
+		rows.Scan(&ts, &l.Level, &l.Message, &l.Source)
+		t, err := time.Parse("2006-01-02 15:04:05.9999999 -0700 -0700", ts)
+		if err != nil {
+			l.Timestamp = ts
+		} else {
+			l.Timestamp = t.UTC().Format("2006-01-02 15:04:05.000")
+		}
+		logs = append(logs, l)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total": total,
+		"logs":  logs,
+	})
 }

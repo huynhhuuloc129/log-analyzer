@@ -13,7 +13,9 @@ func setupRoutes() {
 	http.Handle("/", http.FileServer(http.Dir(".")))
 	http.HandleFunc("/upload", handler.UploadFile)
 	http.HandleFunc("/files", handler.ListFiles)
+	http.HandleFunc("/search", handler.SearchLogs)
 	http.HandleFunc("/logs", handler.GetLogs)
+	
 	http.ListenAndServe(":8000", nil)
 }
 

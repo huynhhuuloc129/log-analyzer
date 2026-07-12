@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"log-analyzer/models"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -37,6 +38,19 @@ func Init() error {
 		process_id    INTEGER,
 		thread_id     INTEGER
 	)`)
+
+	if err != nil {
+		return err
+	}
+	
+	_, err = DB.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+		message,
+		source
+	)`)
+	if err != nil {
+		return err
+	}
+
 	return err
 }
 
@@ -77,5 +91,13 @@ func InsertEntries(filename string, entries []models.LogEntry) error {
 		}
 	}
 
-	return tx.Commit()
+	// Commit entries first
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Then build FTS index from committed entries
+	_, err = DB.Exec(`INSERT INTO entries_fts(rowid, message, source) 
+		SELECT id, message, source FROM entries WHERE file_id = ?`, fileID)
+	return err
 }

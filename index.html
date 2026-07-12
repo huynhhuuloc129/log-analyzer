@@ -192,6 +192,12 @@
         font-size: 12px;
       }
 
+      mark {
+        background: #f9c74f;
+        color: #1e1e1e;
+        border-radius: 2px;
+        padding: 0 2px;
+      }
       #pagination span {
         color: #9cdcfe;
       }
@@ -202,6 +208,15 @@
       #pagination .btn:disabled {
         opacity: 0.4;
         cursor: not-allowed;
+      }
+      .level-btn {
+        background: #3c3c3c;
+        opacity: 0.4;
+        padding: 4px 10px;
+        font-size: 12px;
+      }
+      .level-btn.active {
+        opacity: 1;
       }
     </style>
   </head>
@@ -250,10 +265,32 @@
         <div id="panel">
           <!-- Filters -->
           <div id="filters">
+            <input
+              type="text"
+              v-model="searchQuery"
+              placeholder="Search messages..."
+              style="flex: 1; min-width: 200px"
+            />
+            <button class="btn" @click="doSearch">Search</button>
+
             <label>From</label>
             <input type="datetime-local" v-model="fromDate" />
             <label>To</label>
             <input type="datetime-local" v-model="toDate" />
+
+            <!-- Level filters -->
+            <div style="display: flex; gap: 6px; margin-left: 8px">
+              <button
+                v-for="lvl in levels"
+                :key="lvl"
+                class="btn level-btn"
+                :class="{ active: selectedLevels.includes(lvl), [`level-${lvl}`]: true }"
+                @click="toggleLevel(lvl)"
+              >
+                {{ lvl }}
+              </button>
+            </div>
+
             <button class="btn" @click="applyFilter">Apply</button>
           </div>
 
@@ -261,8 +298,13 @@
             <button class="btn" :disabled="page === 0" @click="prevPage">
               ← Prev
             </button>
-            <span>Page {{ page + 1 }}</span>
-            <button class="btn" @click="nextPage">Next →</button>
+            <span v-if="isSearchMode"
+              >{{ searchTotal }} results — Page {{ page + 1 }}</span
+            >
+            <span v-else>Page {{ page + 1 }}</span>
+            <button class="btn" :disabled="!hasNextPage" @click="nextPage">
+              Next →
+            </button>
           </div>
 
           <!-- Log table -->
@@ -284,7 +326,25 @@
                 <tr v-for="(log, i) in logs" :key="i">
                   <td>{{ log.timestamp }}</td>
                   <td :class="`level-${log.level}`">{{ log.level }}</td>
-                  <td>{{ log.message }}</td>
+                  <td
+                    @click="toggleExpand(i)"
+                    style="cursor: pointer; max-width: 600px"
+                  >
+                    <span v-if="expanded === i">{{ log.message }}</span>
+                    <span
+                      v-else
+                      style="
+                        white-space: nowrap;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        display: block;
+                      "
+                    >
+                      {{ log.message.length > 100 ? log.message.slice(0, 100) +
+                      '...' : log.message }}
+                    </span>
+                  </td>
+
                   <td>{{ log.source }}</td>
                 </tr>
               </tbody>
@@ -295,7 +355,7 @@
     </div>
 
     <script>
-      const { createApp, ref, onMounted } = Vue;
+      const { createApp, ref, onMounted, computed } = Vue;
 
       createApp({
         setup() {
@@ -305,7 +365,24 @@
           const fromDate = ref("");
           const toDate = ref("");
           const fileInput = ref(null);
+          const page = ref(0);
+          const levels = ["Information", "Warning", "Error", "Debug"];
+          const selectedLevels = ref([
+            "Information",
+            "Warning",
+            "Error",
+            "Debug",
+          ]);
+          const pageSize = 10000;
+          const searchQuery = ref("");
+          const committedSearch = ref("");
+          const isSearchMode = ref(false);
+          const searchTotal = ref(0);
+          const expanded = ref(null);
 
+          function toggleExpand(i) {
+            expanded.value = expanded.value === i ? null : i;
+          }
           async function loadFiles() {
             const res = await fetch("/files");
             files.value = (await res.json()) || [];
@@ -313,52 +390,94 @@
 
           function selectFile(id) {
             activeFileId.value = id;
+            page.value = 0;
+            isSearchMode.value = false;
+            searchQuery.value = "";
             applyFilter();
           }
 
-          const page = ref(0);
+          function toggleLevel(lvl) {
+            if (selectedLevels.value.includes(lvl)) {
+              selectedLevels.value = selectedLevels.value.filter(
+                (l) => l !== lvl,
+              );
+            } else {
+              selectedLevels.value.push(lvl);
+            }
+            isSearchMode.value ? fetchSearch() : applyFilter();
+          }
 
           async function applyFilter() {
             if (!activeFileId.value) return;
-
-            let url = `/logs?file_id=${activeFileId.value}&page=${page.value * 5000}`;
+            let url = `/logs?file_id=${activeFileId.value}&page=${page.value * pageSize}`;
             if (fromDate.value)
               url += `&from=${encodeURIComponent(fromDate.value)}`;
             if (toDate.value) url += `&to=${encodeURIComponent(toDate.value)}`;
-
+            if (selectedLevels.value.length > 0) {
+              url += `&levels=${selectedLevels.value.join(",")}`;
+            }
             const res = await fetch(url);
             logs.value = (await res.json()) || [];
           }
 
+          async function doSearch() {
+            if (!activeFileId.value || !searchQuery.value) return;
+            committedSearch.value = searchQuery.value; // lock in the search term
+            isSearchMode.value = true;
+            page.value = 0;
+            await fetchSearch();
+          }
+
+          async function fetchSearch() {
+            let url = `/search?file_id=${activeFileId.value}&q=${encodeURIComponent(committedSearch.value)}&page=${page.value * 5000}`;
+            if (selectedLevels.value.length > 0) {
+              url += `&levels=${selectedLevels.value.join(",")}`;
+            }
+            const res = await fetch(url);
+            const data = await res.json();
+            logs.value = data.logs || [];
+            searchTotal.value = data.total;
+          }
           function prevPage() {
             if (page.value === 0) return;
             page.value--;
-            applyFilter();
+            isSearchMode.value ? fetchSearch() : applyFilter();
           }
 
           function nextPage() {
             page.value++;
-            applyFilter();
+            isSearchMode.value ? fetchSearch() : applyFilter();
           }
 
-          function selectFile(id) {
-            activeFileId.value = id;
-            page.value = 0;
-            applyFilter();
+          function highlight(text) {
+            if (!isSearchMode.value || !committedSearch.value) return text;
+            const escaped = committedSearch.value.replace(
+              /[.*+?^${}()|[\]\\]/g,
+              "\\$&",
+            );
+            return text.replace(
+              new RegExp(escaped, "gi"),
+              (m) => `<mark>${m}</mark>`,
+            );
           }
 
           async function uploadFile(e) {
             const file = e.target.files[0];
             if (!file) return;
-
             const form = new FormData();
             form.append("file", file);
-
             const res = await fetch("/upload", { method: "POST", body: form });
             const data = await res.json();
             alert(`Uploaded ${data.file} — ${data.entries} entries`);
             loadFiles();
           }
+
+          const hasNextPage = computed(() => {
+            if (isSearchMode.value) {
+              return (page.value + 1) * pageSize < searchTotal.value;
+            }
+            return logs.value.length >= pageSize;
+          });
 
           onMounted(loadFiles);
 
@@ -369,12 +488,23 @@
             fromDate,
             toDate,
             fileInput,
-            selectFile,
-            applyFilter,
-            uploadFile,
             page,
+            levels,
+            selectedLevels,
+            searchQuery,
+            isSearchMode,
+            searchTotal,
+            selectFile,
+            toggleLevel,
+            applyFilter,
+            doSearch,
             prevPage,
             nextPage,
+            uploadFile,
+            highlight,
+            hasNextPage,
+            expanded,
+            toggleExpand,
           };
         },
       }).mount("#app");
